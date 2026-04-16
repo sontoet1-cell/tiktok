@@ -1,0 +1,9 @@
+{
+  "name": "tiktok-channel-downloader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Download all public videos from a TikTok channel and zip them",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

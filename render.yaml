@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: tiktok-channel-downloader
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    autoDeploy: true
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: Asia/Bangkok
