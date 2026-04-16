@@ -12,6 +12,7 @@ const downloadEl = document.getElementById("download");
 
 let currentJobId = "";
 let pollHandle = null;
+let transientErrorCount = 0;
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message;
@@ -35,6 +36,7 @@ async function pollJob() {
   if (!currentJobId) return;
   try {
     const data = await requestJson(`/api/status/${encodeURIComponent(currentJobId)}`);
+    transientErrorCount = 0;
     totalEl.textContent = String(data.total || 0);
     downloadedEl.textContent = String(data.downloaded || 0);
     failedEl.textContent = String(data.failed || 0);
@@ -57,6 +59,12 @@ async function pollJob() {
 
     pollHandle = setTimeout(pollJob, 1500);
   } catch (error) {
+    transientErrorCount += 1;
+    if (transientErrorCount <= 8) {
+      setStatus("Ket noi tam thoi gian doan, dang thu lai...");
+      pollHandle = setTimeout(pollJob, 2500);
+      return;
+    }
     submitBtn.disabled = false;
     setStatus(error.message || "Khong doc duoc tien trinh.", true);
   }
@@ -76,6 +84,7 @@ form.addEventListener("submit", async (event) => {
   if (pollHandle) clearTimeout(pollHandle);
   downloadEl.classList.add("hidden");
   submitBtn.disabled = true;
+  transientErrorCount = 0;
   totalEl.textContent = "0";
   downloadedEl.textContent = "0";
   failedEl.textContent = "0";

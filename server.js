@@ -25,6 +25,61 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function getJobDirById(id) {
+  return path.join(RUNTIME_DIR, id);
+}
+
+function getJobStatePathById(id) {
+  return path.join(getJobDirById(id), "job.json");
+}
+
+function serializeJob(job) {
+  return {
+    id: job.id,
+    channelUrl: job.channelUrl,
+    channelTitle: job.channelTitle,
+    status: job.status,
+    stage: job.stage,
+    progress: job.progress,
+    total: job.total,
+    downloaded: job.downloaded,
+    failed: job.failed,
+    failures: Array.isArray(job.failures) ? job.failures : [],
+    error: job.error || "",
+    zipPath: job.zipPath || "",
+    filename: job.filename || "",
+    tempDir: job.tempDir,
+    updatedAt: job.updatedAt || Date.now()
+  };
+}
+
+async function saveJobState(job) {
+  const statePath = getJobStatePathById(job.id);
+  await fs.promises.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.promises.writeFile(statePath, JSON.stringify(serializeJob(job), null, 2), "utf8");
+}
+
+async function loadJobState(id) {
+  try {
+    const statePath = getJobStatePathById(id);
+    const raw = await fs.promises.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.id) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveJob(id) {
+  const inMemory = jobs.get(id);
+  if (inMemory) return inMemory;
+  const fromDisk = await loadJobState(id);
+  if (!fromDisk) return null;
+  jobs.set(id, fromDisk);
+  return fromDisk;
+}
+
 function createHttpError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -262,9 +317,11 @@ function setJobProgress(job, progress, stage) {
 async function runJob(job) {
   try {
     setJobProgress(job, 5, "Dang lay danh sach video");
+    await saveJobState(job);
     const playlist = await listChannelEntries(job.channelUrl, job.tempDir);
     job.channelTitle = playlist.title;
     job.total = playlist.entries.length;
+    await saveJobState(job);
 
     const videosDir = path.join(job.tempDir, "videos");
     fs.mkdirSync(videosDir, { recursive: true });
@@ -281,6 +338,7 @@ async function runJob(job) {
         job.failed += 1;
         job.failures.push(`#${index + 1} | ${item.url} | ${error.message || "Tai that bai."}`);
       }
+      await saveJobState(job);
     }
 
     if (job.downloaded === 0) throw createHttpError(502, "Khong tai duoc video nao.");
@@ -298,10 +356,12 @@ async function runJob(job) {
     job.zipPath = zipPath;
     job.status = "done";
     setJobProgress(job, 100, "Hoan tat");
+    await saveJobState(job);
   } catch (error) {
     job.status = "error";
     job.error = error.message || "Xu ly that bai.";
     job.updatedAt = Date.now();
+    await saveJobState(job).catch(() => {});
   }
 }
 
@@ -327,6 +387,8 @@ function serveStatic(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
+  console.log(`[req] ${req.method} ${req.url}`);
+
   if ((req.method === "GET" || req.method === "HEAD") && req.url === "/healthz") {
     if (req.method === "HEAD") {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -347,7 +409,8 @@ const server = http.createServer(async (req, res) => {
       const body = raw ? JSON.parse(raw) : {};
       const channelUrl = normalizeTikTokChannelUrl(body.url);
       const id = createJobId();
-      const tempDir = fs.mkdtempSync(path.join(RUNTIME_DIR, "job-"));
+      const tempDir = getJobDirById(id);
+      await fs.promises.mkdir(tempDir, { recursive: true });
       const job = {
         id,
         channelUrl,
@@ -366,6 +429,7 @@ const server = http.createServer(async (req, res) => {
         updatedAt: Date.now()
       };
       jobs.set(id, job);
+      await saveJobState(job);
       runJob(job);
       sendJson(res, 200, { id, status: job.status });
     } catch (error) {
@@ -376,7 +440,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && req.url.startsWith("/api/status/")) {
     const id = decodeURIComponent(req.url.slice("/api/status/".length));
-    const job = jobs.get(id);
+    const job = await resolveJob(id);
     if (!job) {
       sendJson(res, 404, { error: "Khong tim thay job." });
       return;
@@ -398,7 +462,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && req.url.startsWith("/api/file/")) {
     const id = decodeURIComponent(req.url.slice("/api/file/".length));
-    const job = jobs.get(id);
+    const job = await resolveJob(id);
     if (!job) {
       sendJson(res, 404, { error: "Khong tim thay job." });
       return;
